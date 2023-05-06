@@ -9,4 +9,3 @@ description = "Request a peers from Bittorent DHT network"
 [dependencies]
 lava_torrent = "0.9"
 thiserror = "1.0"
-crossbeam-channel = "0.5"
