@@ -15,7 +15,7 @@ pub fn bytes_to_sock(bytes: [u8; 6]) -> SocketAddr {
     SocketAddr::new(ip, port)
 }
 
-pub fn get_peer_msg(local_node_id: [u8; 20], info_hash: [u8; 20]) -> BencodeElem {
+pub fn get_peers_msg(local_node_id: [u8; 20], info_hash: [u8; 20]) -> BencodeElem {
     let t = (String::from("t"), BencodeElem::String(String::from("aa")));
     let y = (String::from("y"), BencodeElem::String(String::from("q")));
     let q = (
@@ -106,7 +106,7 @@ pub enum Error {
     ProtoError(BencodeElem),
 }
 
-pub fn get_peer_responce_decode(recv: &[u8]) -> Result<PeersNodes, Error> {
+pub fn get_peers_responce_decode(recv: &[u8]) -> Result<PeersNodes, Error> {
     let bencode = BencodeElem::from_bytes(recv)?
         .first()
         .cloned()
@@ -200,7 +200,7 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.set_read_timeout(Some(Duration::from_secs(1)))?;
 
-    let get_peer_msg = get_peer_msg(my_node_id, info_hash).encode();
+    let get_peers_msg = get_peers_msg(my_node_id, info_hash).encode();
 
     // Polls n nodes. When there is peers in the answer, finish lookup and exit.
     // Otherwise collect new nodes from response, calculate distance,
@@ -209,15 +209,15 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
         // (id, addr) pairs, collect during iteration
         let mut iter_nodes = Vec::new();
 
-        // send get_peer to each node
+        // send get_peers to each node
         for addr in &nodes {
-            sock.send_to(&get_peer_msg, addr)?;
+            sock.send_to(&get_peers_msg, addr)?;
         }
 
         // and wait em response
         for _ in 0..nodes.len() {
             if let Ok(len) = sock.recv(&mut recv_buf) {
-                match get_peer_responce_decode(&recv_buf[..len]) {
+                match get_peers_responce_decode(&recv_buf[..len]) {
                     Ok(PeersNodes::Nodes(n)) => iter_nodes.extend_from_slice(&n),
                     Ok(PeersNodes::Peers(p)) => peers.extend_from_slice(&p),
                     Err(_) => (), //TODO: debug
