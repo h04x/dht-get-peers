@@ -9,3 +9,7 @@ description = "Request a peers from Bittorent DHT network"
 [dependencies]
 lava_torrent = "0.9"
 thiserror = "1.0"
+log = "0.4.17"
+
+[dev-dependencies]
+env_logger = "0.9"

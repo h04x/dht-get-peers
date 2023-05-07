@@ -6,6 +6,7 @@ use std::{
 };
 
 use lava_torrent::{bencode::BencodeElem, LavaTorrentError};
+use log::debug;
 use thiserror::Error;
 
 pub fn bytes_to_sock(bytes: [u8; 6]) -> SocketAddr {
@@ -180,6 +181,7 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
     info_hash: [u8; 20],
     bootstrappers: T,
 ) -> Result<Vec<SocketAddr>, GetPeersError> {
+
     // hardcoded source node id
     let my_node_id = [7; 20];
 
@@ -202,7 +204,7 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
 
     let get_peers_msg = get_peers_msg(my_node_id, info_hash).encode();
 
-    // Polls n nodes. When there is peers in the answer, finish lookup and exit.
+    // Polls n nodes. When there is peers in the response, finish lookup and return.
     // Otherwise collect new nodes from response, calculate distance,
     // select n closest to info_hash and poll again
     loop {
@@ -220,12 +222,13 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
                 match get_peers_responce_decode(&recv_buf[..len]) {
                     Ok(PeersNodes::Nodes(n)) => iter_nodes.extend_from_slice(&n),
                     Ok(PeersNodes::Peers(p)) => peers.extend_from_slice(&p),
-                    Err(_) => (), //TODO: debug
+                    Err(e) => debug!("parse response failed with '{:?}', message: {:?}", e, BencodeElem::from_bytes(&recv_buf[..len])),
                 }
             }
         }
 
         if !peers.is_empty() {
+            peers.dedup();
             return Ok(peers);
         }
 
