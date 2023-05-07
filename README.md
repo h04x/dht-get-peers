@@ -1,5 +1,5 @@
 # dht-get-peers
-Request a peers from Bittorent DHT network
+Request a peers from Bittorent DHT network [BEP05](https://www.bittorrent.org/beps/bep_0005.html)
 
 ## Example
 ```Rust

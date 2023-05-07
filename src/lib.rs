@@ -181,7 +181,6 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
     info_hash: [u8; 20],
     bootstrappers: T,
 ) -> Result<Vec<SocketAddr>, GetPeersError> {
-
     // hardcoded source node id
     let my_node_id = [7; 20];
 
@@ -222,7 +221,11 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
                 match get_peers_responce_decode(&recv_buf[..len]) {
                     Ok(PeersNodes::Nodes(n)) => iter_nodes.extend_from_slice(&n),
                     Ok(PeersNodes::Peers(p)) => peers.extend_from_slice(&p),
-                    Err(e) => debug!("parse response failed with '{:?}', message: {:?}", e, BencodeElem::from_bytes(&recv_buf[..len])),
+                    Err(e) => debug!(
+                        "parse response failed with '{:?}', raw message: {:?}",
+                        e,
+                        BencodeElem::from_bytes(&recv_buf[..len])
+                    ),
                 }
             }
         }
