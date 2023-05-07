@@ -181,21 +181,21 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
     info_hash: [u8; 20],
     bootstrappers: T,
 ) -> Result<Vec<SocketAddr>, GetPeersError> {
-    // hardcoded source node id
+    // hardcoded our node id
     let my_node_id = [7; 20];
 
-    // how many closest nodes we select after each iterations
-    const SELECTED: usize = 5;
+    // how many nodes we select after each iterations
+    const LIM_SELECTED: usize = 5;
 
     // collect visited nodes for prevent repetition
     let mut visited = HashMap::new();
 
     let mut recv_buf = [0; 1024];
 
-    // nodes, that polled on each iteration, initiate by bootstrappers
+    // nodes, which polled on each iteration, initiate by bootstrappers
     let mut nodes = bootstrappers.to_socket_addrs()?.collect::<Vec<_>>();
 
-    // collect peers
+    // collected peers
     let mut peers = Vec::new();
 
     let sock = UdpSocket::bind("0.0.0.0:0")?;
@@ -203,8 +203,8 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
 
     let get_peers_msg = get_peers_msg(my_node_id, info_hash).encode();
 
-    // Polls n nodes. When there is peers in the response, finish lookup and return.
-    // Otherwise collect new nodes from response, calculate distance,
+    // Polls n nodes. When there is peers in the response, return peers.
+    // Otherwise collect new nodes from response, filter,
     // select n closest to info_hash and poll again
     loop {
         // (id, addr) pairs, collect during iteration
@@ -245,14 +245,14 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
         // remove duplicates
         iter_nodes.dedup_by(|a, b| a.addr == b.addr);
 
-        // order in XOR metric
+        // sort in XOR order asc
         iter_nodes.sort_by(|a, b| {
             let a = xor(info_hash, a.id);
             let b = xor(info_hash, b.id);
             a.cmp(&b)
         });
 
-        iter_nodes.truncate(SELECTED);
+        iter_nodes.truncate(LIM_SELECTED);
 
         // mark remaining nodes as visited
         iter_nodes.iter().for_each(|n| {
