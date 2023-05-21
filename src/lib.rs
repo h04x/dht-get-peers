@@ -1,146 +1,43 @@
 use std::{
     collections::HashMap,
     io,
-    net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket},
+    net::{SocketAddr, ToSocketAddrs, UdpSocket},
     time::Duration,
 };
 
-use lava_torrent::{bencode::BencodeElem, LavaTorrentError};
+use krpc_message::{FromBencode, Message, Node, Payload, ToBencode};
 use log::debug;
 use thiserror::Error;
 
-pub fn bytes_to_sock(bytes: [u8; 6]) -> SocketAddr {
-    let (ip, port) = bytes.split_at(4);
-    let ip = IpAddr::from(<[u8; 4]>::try_from(ip).unwrap());
-    let port = u16::from_be_bytes(port.try_into().unwrap());
-    SocketAddr::new(ip, port)
-}
-
-pub fn get_peers_msg(local_node_id: [u8; 20], info_hash: [u8; 20]) -> BencodeElem {
-    let t = (String::from("t"), BencodeElem::String(String::from("aa")));
-    let y = (String::from("y"), BencodeElem::String(String::from("q")));
-    let q = (
-        String::from("q"),
-        BencodeElem::String(String::from("get_peers")),
-    );
-
-    let id = (
-        String::from("id"),
-        BencodeElem::Bytes(local_node_id.to_vec()),
-    );
-    let info_hash = (
-        String::from("info_hash"),
-        BencodeElem::Bytes(info_hash.to_vec()),
-    );
-
-    let a = (
-        String::from("a"),
-        BencodeElem::Dictionary(HashMap::from([id, info_hash])),
-    );
-
-    BencodeElem::Dictionary(HashMap::from([t, y, q, a]))
-}
-
-#[derive(Debug, Clone)]
-pub struct CompactNode {
-    pub id: [u8; 20],
-    pub addr: SocketAddr,
-}
-
-impl CompactNode {
-    pub fn from_bytes(bytes: [u8; 26]) -> CompactNode {
-        let (id, addr) = bytes.split_at(20);
-        let addr = bytes_to_sock(addr.try_into().unwrap());
-        CompactNode {
-            id: id.try_into().unwrap(),
-            addr,
-        }
-    }
-}
-
 #[derive(Debug)]
-pub enum PeersNodes {
+pub enum PeersOrNodes {
     Peers(Vec<SocketAddr>),
-    Nodes(Vec<CompactNode>),
-}
-
-impl PeersNodes {
-    pub fn peers_from_list(elems: &[BencodeElem]) -> PeersNodes {
-        let mut peers = Vec::new();
-        for e in elems {
-            match e {
-                BencodeElem::Bytes(b) => {
-                    if let Ok(bytes) = <[u8; 6]>::try_from(b.clone()) {
-                        peers.push(bytes_to_sock(bytes));
-                    }
-                }
-                BencodeElem::String(s) => {
-                    if let Ok(bytes) = <[u8; 6]>::try_from(s.bytes().collect::<Vec<_>>()) {
-                        peers.push(bytes_to_sock(bytes));
-                    }
-                }
-                _ => (),
-            }
-        }
-        PeersNodes::Peers(peers)
-    }
-    pub fn nodes_from_bytes(bytes: &[u8]) -> Result<PeersNodes, ()> {
-        let chunks = bytes.chunks_exact(26);
-        if !chunks.remainder().is_empty() {
-            return Err(());
-        }
-        Ok(PeersNodes::Nodes(
-            chunks
-                .map(|c| CompactNode::from_bytes(c.try_into().unwrap()))
-                .collect(),
-        ))
-    }
+    Nodes(Vec<Node>),
 }
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("bencode parse error")]
-    LavaTorrentError(#[from] LavaTorrentError),
     #[error("deserialize error")]
-    DeserializeError(u8),
-    #[error("proto error")]
-    ProtoError(BencodeElem),
+    DeserializeError(#[from] krpc_message::decoding::Error),
+    #[error("expecting response")]
+    ExpectResponse,
+    #[error("expecting peers or/and nodes in response")]
+    ExpectPeersNodes,
 }
 
-pub fn get_peers_responce_decode(recv: &[u8]) -> Result<PeersNodes, Error> {
-    let bencode = BencodeElem::from_bytes(recv)?
-        .first()
-        .cloned()
-        .ok_or(Error::DeserializeError(1))?;
+pub fn get_peers_responce_decode(recv: &[u8]) -> Result<PeersOrNodes, Error> {
+    let msg = Message::from_bencode(recv)?;
 
-    let dict = match bencode {
-        BencodeElem::Dictionary(d) => d,
-        _ => return Err(Error::DeserializeError(2)),
+    let Payload::Response(response) = msg.payload else {
+        return Err(Error::ExpectResponse);
     };
 
-    if let Some(e) = dict.get("e") {
-        return Err(Error::ProtoError(e.clone()));
-    }
-
-    let r = dict.get("r").ok_or(Error::DeserializeError(3))?;
-
-    let dict = match r {
-        BencodeElem::Dictionary(d) => d,
-        _ => return Err(Error::DeserializeError(4)),
-    };
-
-    let peers = dict.get("values");
-    let nodes = dict.get("nodes");
-
-    Ok(match (peers, nodes) {
-        (Some(BencodeElem::List(p)), None)
-        | (Some(BencodeElem::List(p)), Some(BencodeElem::Bytes(_))) => {
-            PeersNodes::peers_from_list(p)
+    Ok(match (response.values, response.nodes) {
+        (Some(peers), None) | (Some(peers), Some(_)) => {
+            PeersOrNodes::Peers(peers.into_iter().map(|s| s.into()).collect())
         }
-        (None, Some(BencodeElem::Bytes(n))) => {
-            PeersNodes::nodes_from_bytes(n).map_err(|_| Error::DeserializeError(6))?
-        }
-        _ => return Err(Error::DeserializeError(7)),
+        (None, Some(nodes)) => PeersOrNodes::Nodes(nodes),
+        _ => return Err(Error::ExpectPeersNodes),
     })
 }
 
@@ -201,7 +98,9 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.set_read_timeout(Some(Duration::from_secs(1)))?;
 
-    let get_peers_msg = get_peers_msg(my_node_id, info_hash).encode();
+    let get_peers_msg = Message::get_peers(24929, my_node_id, info_hash)
+        .to_bencode()
+        .expect("unable to generate get_peers msg");
 
     // Polls n nodes. When there is peers in the response, return peers.
     // Otherwise collect new nodes from response, filter,
@@ -219,12 +118,12 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
         for _ in 0..nodes.len() {
             if let Ok(len) = sock.recv(&mut recv_buf) {
                 match get_peers_responce_decode(&recv_buf[..len]) {
-                    Ok(PeersNodes::Nodes(n)) => iter_nodes.extend_from_slice(&n),
-                    Ok(PeersNodes::Peers(p)) => peers.extend_from_slice(&p),
+                    Ok(PeersOrNodes::Nodes(n)) => iter_nodes.extend_from_slice(&n),
+                    Ok(PeersOrNodes::Peers(p)) => peers.extend_from_slice(&p),
                     Err(e) => debug!(
                         "parse response failed with '{:?}', raw message: {:?}",
                         e,
-                        BencodeElem::from_bytes(&recv_buf[..len])
+                        Message::from_bencode(&recv_buf[..len])
                     ),
                 }
             }
@@ -247,8 +146,8 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
 
         // sort in XOR order asc
         iter_nodes.sort_by(|a, b| {
-            let a = xor(info_hash, a.id);
-            let b = xor(info_hash, b.id);
+            let a = xor(info_hash, a.id.bytes);
+            let b = xor(info_hash, b.id.bytes);
             a.cmp(&b)
         });
 
@@ -259,6 +158,6 @@ pub fn get_peers_bs<T: ToSocketAddrs>(
             visited.insert(n.addr, ());
         });
 
-        nodes = iter_nodes.iter().map(|i| i.addr).collect();
+        nodes = iter_nodes.iter().map(|i| i.addr.into()).collect();
     }
 }

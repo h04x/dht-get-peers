@@ -7,7 +7,7 @@ description = "Request a peers from Bittorent DHT network"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lava_torrent = "0.9"
+krpc-message = { git="https://github.com/h04x/krpc-message", rev="70abc73" }
 thiserror = "1.0"
 log = "0.4.17"
 
